@@ -1,0 +1,219 @@
+import {
+  supabaseHandleError,
+  supabaseReturnPaginated,
+} from '../../services/supabase/_supabaseUtils';
+import { supabase } from '../../supabaseClient';
+import {
+  FilterStatement,
+  PaginatedRequestData,
+  SupabaseFilterTypes,
+} from '../types/_paginatedRequest';
+
+interface PaginatedRawResponse<T = any> {
+  data: T[];
+  count: number;
+}
+
+// TODO: type the response of this query builder
+export async function paginatedQuery<T = any>(
+  data: PaginatedRequestData,
+): Promise<PaginatedRawResponse<T>> {
+  const { request, targetTable, defaultSort, select } = data;
+  const { page, per_page, sort_field, sort_order, search, search_fields } = request;
+
+  // Base query
+  let query = supabase.from(targetTable).select(select || '*', { count: 'exact' });
+
+  if (sort_field && sort_order) {
+    // Sort by incoming sort data if provided
+    const splitOrder = sort_field.split('.');
+    if (splitOrder.length > 1) {
+      const orderTarget = splitOrder[splitOrder.length - 1];
+      const foreignTable = splitOrder.slice(0, -1).join('.');
+
+      query = query.order(orderTarget, {
+        ascending: true,
+        foreignTable,
+      });
+    } else {
+      query = query.order(sort_field, { ascending: sort_order === 1 });
+    }
+  } else if (defaultSort) {
+    // If not sort data, use default sort data if provided
+    defaultSort.forEach((sort) => {
+      // Attempt to split
+      const splitOrder = sort.field.split('.');
+      if (splitOrder.length > 1) {
+        const orderTarget = splitOrder[splitOrder.length - 1];
+        const foreignTable = splitOrder.slice(0, -1).join('.');
+
+        query = query.order(orderTarget, {
+          ascending: true,
+          foreignTable,
+        });
+      } else {
+        query = query.order(sort.field, { ascending: sort.order === 1 });
+      }
+    });
+  }
+
+  if (request.filters) {
+    const {
+      eq,
+      lt,
+      gt,
+      lte,
+      gte,
+      or,
+      in: inData,
+      neq,
+      ilike,
+      is,
+      isNot,
+      overlaps,
+      notOverlaps,
+    } = request.filters;
+
+    // -- EQUALS --
+    if (eq && eq.length > 0) {
+      eq.forEach((statement) => {
+        query = query.eq(statement.field as string, statement.value);
+      });
+    }
+
+    // -- NOT EQUALS --
+    if (neq && neq.length > 0) {
+      neq.forEach((statement) => {
+        query = query.neq(statement.field as string, statement.value);
+      });
+    }
+
+    // -- LESS THAN --
+    if (lt && lt.length > 0) {
+      lt.forEach((statement) => {
+        query = query.lt(statement.field as string, statement.value);
+      });
+    }
+
+    // -- GREATER THAN --
+    if (gt && gt.length > 0) {
+      gt.forEach((statement) => {
+        query = query.gt(statement.field as string, statement.value);
+      });
+    }
+
+    // -- LESS THAN / EQUAlS --
+    if (lte && lte.length > 0) {
+      lte.forEach((statement) => {
+        query = query.lte(statement.field as string, statement.value);
+      });
+    }
+
+    // -- GREATER THAN / EQUAlS --
+    if (gte && gte.length > 0) {
+      gte.forEach((statement) => {
+        query = query.gte(statement.field as string, statement.value);
+      });
+    }
+
+    // -- OR --
+    if (or && or.length > 0) {
+      const orValues: Array<string> = [];
+      or.forEach((statement) => {
+        let and = 'and(';
+        const andStatement = Object.keys(statement.AND) as SupabaseFilterTypes[];
+        andStatement.forEach((key: SupabaseFilterTypes, index) => {
+          const condition = statement.AND?.[key] as FilterStatement[];
+          if (condition) {
+            condition.forEach((filter: FilterStatement, filterIndex: number) => {
+              and = `${index === 0 && filterIndex === 0 ? `${and}` : `${and},`}${String(
+                filter.field,
+              )}.${key}.${filter.value}`;
+            });
+          }
+        });
+        // note closing paren is added here
+        orValues.push(`${and})`);
+      });
+      query = query.or(orValues.join(','));
+    }
+
+    // -- IN --
+    // in is a reserved word, converted to inData here, kept "in" elsewhere to match function name
+    if (inData && inData.length > 0) {
+      inData.forEach((statement) => {
+        query = query.in(statement.field as string, statement.value);
+      });
+    }
+
+    // -- OVERLAPS --
+    if (overlaps && overlaps.length) {
+      overlaps.forEach((statement) => {
+        query = query.overlaps(statement.field as string, statement.value);
+      });
+    }
+
+    if (notOverlaps && notOverlaps.length) {
+      notOverlaps.forEach((statement) => {
+        const value = `{${statement.value.map((v) => `"${v}"`).join(',')}}`;
+        query = query.not(statement.field as string, 'ov', value);
+      });
+    }
+
+    // -- ILIKE --
+    if (ilike && ilike.length > 0) {
+      ilike.forEach((statement) => {
+        query = query.ilike(statement.field as string, `%${statement.value}%`);
+      });
+    }
+
+    // -- IS --
+    if (is && is.length > 0) {
+      is.forEach((statement) => {
+        query = query.is(statement.field as string, statement.value);
+      });
+    }
+
+    // -- IS NOT --
+    if (isNot && isNot.length > 0) {
+      isNot.forEach((statement) => {
+        query = query.not(statement.field as string, 'is', statement.value);
+      });
+    }
+  }
+
+  // -- SEARCH --
+  if (search && (search_fields || []).length > 0) {
+    const searchOrStatement = search_fields
+      ?.map((data) => {
+        const field = typeof data === 'string' ? data : data.field;
+        const type = typeof data === 'string' ? 'ilike' : data.type;
+
+        let value: string;
+        switch (type) {
+          case 'ilike':
+            value = `%${search}%`;
+            break;
+
+          case 'eq':
+            value = `${search}`;
+            break;
+        }
+
+        return `${field}.${type}.${value}`;
+      })
+      .join(',');
+    if (searchOrStatement) {
+      query = query.or(searchOrStatement);
+    }
+  }
+
+  // Paginated range
+  if (page !== undefined && per_page !== undefined) {
+    const start = page * per_page;
+    const end = start + (per_page - 1);
+    query = query.range(start, end);
+  }
+
+  return query.then(supabaseHandleError).then(supabaseReturnPaginated);
+}

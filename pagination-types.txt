@@ -1,0 +1,72 @@
+import { SortOrder } from 'primereact/datatable';
+import { Database } from './_databaseTypeDefinitions';
+
+export interface PaginatedResult<T = any> {
+  results: T[];
+  count: number;
+}
+
+export interface PaginatedRange {
+  per_page: number;
+  page: number;
+}
+
+export interface FilterStatement<T = any> {
+  field: keyof T;
+  value: string | number | Date | undefined | null | boolean;
+}
+
+export interface ArrayStatement<T = any> {
+  field: keyof T;
+  value: string[] | boolean[];
+}
+
+export interface LikeStatement<T = any> {
+  field: keyof T;
+  value: string;
+}
+
+export interface SupabaseFilters {
+  eq?: FilterStatement[];
+  lt?: FilterStatement[];
+  gt?: FilterStatement[];
+  lte?: FilterStatement[];
+  gte?: FilterStatement[];
+  in?: ArrayStatement[];
+  neq?: FilterStatement[];
+  or?: OrStatement[];
+  ilike?: LikeStatement[];
+  is?: FilterStatement[];
+  isNot?: FilterStatement[];
+  overlaps?: ArrayStatement[];
+  notOverlaps?: ArrayStatement[];
+}
+
+export type SupabaseFilterTypes = keyof SupabaseFilters;
+export interface OrStatement {
+  AND: SupabaseFilters;
+}
+
+export interface PaginatedRequest {
+  // page and per_page are optional. If not set, the request will get everything
+  // unpaginated for the request. (Used in cases where we want to use the same query
+  // with all of the filters applied, but want to get everything at once)
+  page?: number; // use with limit and range
+  per_page?: number; // use with range
+  filters?: SupabaseFilters;
+  search?: string | null;
+  search_fields?: (string | { field: string; type: 'eq' | 'ilike' })[] | null;
+  sort_field?: string;
+  sort_order?: SortOrder;
+  company_id?: string; // TODO: DO NOT USE GOING FORWARD (use eq array filter / replace with rls)
+}
+
+export interface PaginatedRequestData {
+  request: PaginatedRequest;
+  targetTable: keyof Database['public']['Tables'] | keyof Database['public']['Views'];
+  defaultSort?: {
+    field: string;
+    order: 1 | 0;
+  }[];
+  select?: string;
+}
